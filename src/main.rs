@@ -54,6 +54,38 @@ struct Ray {
 #[derive(Debug,Copy,Clone)]
 struct Color (u8, u8, u8);
 
+impl Add for Color {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Color(
+            (self.0 as u16 + other.0 as u16).clamp(0, 255) as u8,
+            (self.1 as u16 + other.1 as u16).clamp(0, 255) as u8,
+            (self.2 as u16 + other.2 as u16).clamp(0, 255) as u8,
+        )
+    }
+}
+
+impl Mul for Color {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Color(
+            ((self.0 as f64 / 255.0) * (other.0 as f64 / 255.0) * 255.0) as u8, 
+            ((self.1 as f64 / 255.0) * (other.1 as f64 / 255.0) * 255.0) as u8,
+            ((self.2 as f64 / 255.0) * (other.2 as f64 / 255.0) * 255.0) as u8,
+        )
+    }
+}
+
+impl Color {
+    fn scale(self, s: f64) -> Self {
+        Color(
+            (self.0 as f64 * s).clamp(0.0, 255.0) as u8,
+            (self.1 as f64 * s).clamp(0.0, 255.0) as u8,
+            (self.2 as f64 * s).clamp(0.0, 255.0) as u8,
+        )
+    }
+}
+
 #[derive(Debug,Copy,Clone)]
 struct Material {
     color: Color,
@@ -250,16 +282,35 @@ struct Scene {
     background: Color,
 }
 
+impl Solid for Scene {
+    fn intersect(&self, r: &Ray) -> Option<Hit> {
+        let mut hits = Vec::<Option<Hit>>::new();
+        for s in &self.solids {
+            hits.push(s.intersect(r));
+        }
+        min_positive(hits)
+    }
+}
+
 impl Scene {
+    fn shade(&self, h: &Hit) -> Color {
+        let mc = h.3.color;
+        let mut shaded_c = Color(0, 0, 0);
+        for l in &self.lights {
+            let light_vec = l.point - h.1;
+            light_vec.normalize();
+            let intensity = light_vec * h.2;
+            let lc = l.color;
+            let l_shaded_color = (lc * mc).scale(intensity);
+            shaded_c = shaded_c + l_shaded_color;
+        }
+        shaded_c
+    }
     fn render(&self, path: &str) -> std::io::Result<()> {
         let rays = self.camera.rays();
         let mut hits = Vec::<Option<Hit>>::new();
         for ray in &rays {
-            let mut hits_ = Vec::<Option<Hit>>::new();
-            for s in &self.solids {
-                hits_.push(s.intersect(ray));
-            }
-            hits.push(min_positive(hits_));
+            hits.push(self.intersect(ray));
         }
         let mut image = File::create(path)?;
         write!(image, "P3\n")?;
@@ -268,7 +319,7 @@ impl Scene {
         let bg = self.background;
         for (i, h) in hits.iter().enumerate() {
             if let Some(h) = h {
-                let color = self.lights[0].shade(h);
+                let color = self.shade(h);
                 write!(image, "{} {} {} ", color.0, color.1, color.2)?;
             } else {
                 write!(image, "{} {} {} ", bg.0, bg.1, bg.2)?;
@@ -333,7 +384,10 @@ fn main() {
                 },
             }),
         ],
-        lights: vec![Light{point: V3(0.0, 5.0, -2.5), color: Color(255, 255, 255)}],
+        lights: vec![
+            Light{point: V3(-2.5, 5.0, -2.5), color: Color(80,  0, 80)},
+            Light{point: V3( 2.5, 5.0, -2.5), color: Color( 0, 80, 80)},
+        ],
         camera: Camera {
             point: V3(0.0, 1.0, -5.0),
             direction: V3(0.0, 0.0, 1.0),

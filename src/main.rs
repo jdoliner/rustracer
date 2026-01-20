@@ -93,7 +93,13 @@ struct Material {
 }
 
 #[derive(Debug,Copy,Clone)]
-struct Hit(f64, V3, V3, Material);
+struct Hit {
+    distance: f64,
+    direction: V3,
+    point: V3,
+    normal: V3,
+    mat: Material,
+}
 
 trait Solid {
     fn intersect(&self, r: &Ray) -> Option<Hit>;
@@ -102,16 +108,16 @@ trait Solid {
 fn min_positive(hits: Vec<Option<Hit>>) -> Option<Hit> {
     let mut sorted = hits.iter().filter(|x| {
         if let Some(x) = x {
-            x.0 > 0.0
+            x.distance > 0.0
         } else {
             false
         }
     }).collect::<Vec<&Option<Hit>>>();
     sorted.sort_by(|a, b| {
         if let (Some(a), Some(b)) = (a, b) {
-            if a.0 < b.0 {
+            if a.distance < b.distance {
                 Less
-            } else if a.0 > b.0 {
+            } else if a.distance > b.distance {
                 Greater
             } else {
                 Equal
@@ -145,7 +151,13 @@ impl Solid for Plane {
         } else {
             let disp = r.direction.scale(t);
             let hit = r.point + disp;
-            Some(Hit(disp.magnitude(), hit, self.normal, self.mat))
+            Some(Hit{
+                distance: disp.magnitude(),
+                direction: r.direction,
+                point: hit,
+                normal: self.normal,
+                mat: self.mat,
+            })
         }
     }
 }
@@ -186,7 +198,13 @@ impl Solid for Sphere {
                 let disp = r.direction.scale(t);
                 let hit = r.point + disp;
                 let normal = (hit - self.point).scale(1.0/self.radius);
-                Some(Hit(disp.magnitude(), hit, normal, self.mat))
+                Some(Hit{
+                    distance: disp.magnitude(),
+                    direction: r.direction,
+                    point: hit,
+                    normal: normal,
+                    mat: self.mat,
+                })
             } else {
                 None
             }
@@ -216,12 +234,48 @@ impl Solid for Cube {
         let (dispz1, dispz2) = (r.direction.scale(tz1), r.direction.scale(tz2));
 
         let hits = vec![
-            Some(Hit(dispx1.magnitude(), r.point + dispx1, V3(-1.0, 0.0, 0.0), self.mat)),
-            Some(Hit(dispx2.magnitude(), r.point + dispx2, V3( 1.0, 0.0, 0.0), self.mat)),
-            Some(Hit(dispy1.magnitude(), r.point + dispy1, V3(0.0, -1.0, 0.0), self.mat)),
-            Some(Hit(dispy2.magnitude(), r.point + dispy2, V3(0.0,  1.0, 0.0), self.mat)),
-            Some(Hit(dispz1.magnitude(), r.point + dispx1, V3(0.0, 0.0, -1.0), self.mat)),
-            Some(Hit(dispz2.magnitude(), r.point + dispx2, V3(0.0, 0.0,  1.0), self.mat)),
+            Some(Hit{
+                distance: dispx1.magnitude(),
+                direction: r.direction,
+                point: r.point + dispx1,
+                normal: V3(-1.0, 0.0, 0.0),
+                mat: self.mat,
+            }),
+            Some(Hit{
+                distance: dispx2.magnitude(),
+                direction: r.direction,
+                point: r.point + dispx2,
+                normal: V3( 1.0, 0.0, 0.0),
+                mat: self.mat,
+            }),
+            Some(Hit{
+                distance: dispy1.magnitude(),
+                direction: r.direction,
+                point: r.point + dispy1,
+                normal: V3(0.0, -1.0, 0.0),
+                mat: self.mat,
+            }),
+            Some(Hit{
+                distance: dispy2.magnitude(),
+                direction: r.direction,
+                point: r.point + dispy2,
+                normal: V3(0.0,  1.0, 0.0),
+                mat: self.mat,
+            }),
+            Some(Hit{
+                distance: dispz1.magnitude(),
+                direction: r.direction,
+                point: r.point + dispx1,
+                normal: V3(0.0, 0.0, -1.0),
+                mat: self.mat,
+            }),
+            Some(Hit{
+                distance: dispz2.magnitude(),
+                direction: r.direction,
+                point: r.point + dispx2,
+                normal: V3(0.0, 0.0,  1.0),
+                mat: self.mat,
+            }),
         ];
         min_positive(hits)
     }
@@ -230,20 +284,6 @@ impl Solid for Cube {
 struct Light {
     point: V3,
     color: Color,
-}
-
-impl Light {
-    fn shade(&self, h: &Hit) -> Color {
-        let mut light_vec = self.point - h.1;
-        light_vec.normalize();
-        let intensity = light_vec * h.2;
-        let (cl, cm) = (self.color, h.3.color);
-        Color(
-            ((cl.0 as f64 / 255.0) * (cm.0 as f64 / 255.0) * intensity * 255.0) as u8,
-            ((cl.1 as f64 / 255.0) * (cm.1 as f64 / 255.0) * intensity * 255.0) as u8,
-            ((cl.2 as f64 / 255.0) * (cm.2 as f64 / 255.0) * intensity * 255.0) as u8,
-        )
-    }
 }
 
 struct Camera {
@@ -293,18 +333,28 @@ impl Solid for Scene {
 }
 
 impl Scene {
-    fn shade(&self, h: &Hit) -> Color {
-        let mc = h.3.color;
+    fn shade(&self, h: &Hit, bounces: i64) -> Color {
+        let mc = h.mat.color;
         let mut shaded_c = Color(0, 0, 0);
         for l in &self.lights {
-            let light_vec = l.point - h.1;
+            let light_vec = l.point - h.point;
             light_vec.normalize();
-            let intensity = light_vec * h.2;
+            let intensity = light_vec * h.normal;
             let lc = l.color;
             let l_shaded_color = (lc * mc).scale(intensity);
             shaded_c = shaded_c + l_shaded_color;
         }
-        shaded_c
+        let r = h.mat.reflection;
+        let mut reflection_c = self.background;
+        if r > EPSILON && bounces > 0 {
+            let r_direction = h.direction - h.normal.scale(2.0 * (h.direction * h.normal));
+            let r_point = h.point + h.normal.scale(0.0001);
+            let rh = &self.intersect(&Ray{point: r_point, direction: r_direction});
+            if let Some(rh) = rh {
+                reflection_c = self.shade(rh, bounces - 1);
+            }
+        }
+        shaded_c.scale(1.0 - r) + reflection_c.scale(r)
     }
     fn render(&self, path: &str) -> std::io::Result<()> {
         let rays = self.camera.rays();
@@ -319,7 +369,7 @@ impl Scene {
         let bg = self.background;
         for (i, h) in hits.iter().enumerate() {
             if let Some(h) = h {
-                let color = self.shade(h);
+                let color = self.shade(h, 8);
                 write!(image, "{} {} {} ", color.0, color.1, color.2)?;
             } else {
                 write!(image, "{} {} {} ", bg.0, bg.1, bg.2)?;
@@ -340,7 +390,7 @@ fn main() {
                 normal: V3(0.0, 1.0, 0.0),
                 mat: Material {
                     color: Color(0, 0, 255),
-                    reflection: 0.2,
+                    reflection: 0.4,
                 },
             }),
             Box::new(Sphere{
@@ -348,7 +398,7 @@ fn main() {
                 radius: 1.0,
                 mat: Material {
                     color: Color(0, 255, 0),
-                    reflection: 0.0,
+                    reflection: 0.1,
                 },
             }),
             Box::new(Sphere{
@@ -356,7 +406,7 @@ fn main() {
                 radius: 1.0,
                 mat: Material {
                     color: Color(255, 0, 0),
-                    reflection: 0.0,
+                    reflection: 0.1,
                 },
             }),
             Box::new(Sphere{
@@ -364,7 +414,7 @@ fn main() {
                 radius: 1.0,
                 mat: Material {
                     color: Color(0, 255, 0),
-                    reflection: 0.0,
+                    reflection: 0.1,
                 },
             }),
             Box::new(Sphere{
@@ -372,7 +422,7 @@ fn main() {
                 radius: 1.0,
                 mat: Material {
                     color: Color(255, 0, 0),
-                    reflection: 0.0,
+                    reflection: 0.1,
                 },
             }),
             Box::new(Sphere{
@@ -380,7 +430,7 @@ fn main() {
                 radius: 1.0,
                 mat: Material {
                     color: Color(0, 255, 0),
-                    reflection: 0.0,
+                    reflection: 0.1,
                 },
             }),
         ],

@@ -337,9 +337,17 @@ impl Scene {
         let mc = h.mat.color;
         let mut shaded_c = Color(0, 0, 0);
         for l in &self.lights {
-            let light_vec = l.point - h.point;
-            light_vec.normalize();
-            let intensity = light_vec * h.normal;
+            let light_dir = l.point - h.point;
+            let light_dist = light_dir.magnitude();
+            light_dir.normalize();
+            let sh = &self.intersect(&Ray{
+                point: h.point + h.normal.scale(0.0001),
+                direction: light_dir,
+            });
+            if let Some(sh) = sh && sh.distance < light_dist {
+                continue
+            }
+            let intensity = light_dir * h.normal;
             let lc = l.color;
             let l_shaded_color = (lc * mc).scale(intensity);
             shaded_c = shaded_c + l_shaded_color;

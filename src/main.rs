@@ -216,7 +216,7 @@ impl Camera {
         let W = self.direction;
         let U = V3(0.0, 1.0, 0.0).cross(W);
         let V = W.cross(U);
-        for j in 0..self.resolution.1 {
+        for j in (0..self.resolution.1).rev() {
             for i in 0..self.resolution.0 {
                 let (u, v) = ((i as f64 + 0.5)/self.resolution.0 as f64, (j as f64 + 0.5)/self.resolution.1 as f64);
                 let (x, y) = (((2.0 * u) - 1.0) * (width / 2.0), (1.0 - (2.0 * v)) * (height / 2.0));
@@ -286,13 +286,45 @@ fn main() {
                     reflection: 0.0,
                 },
             }),
+            Box::new(Sphere{
+                point: V3(-1.0, 1.0, 0.0),
+                radius: 1.0,
+                mat: Material {
+                    color: Color(255, 0, 0),
+                    reflection: 0.0,
+                },
+            }),
+            Box::new(Sphere{
+                point: V3(-2.0, 1.0, 0.0),
+                radius: 1.0,
+                mat: Material {
+                    color: Color(0, 255, 0),
+                    reflection: 0.0,
+                },
+            }),
+            Box::new(Sphere{
+                point: V3(1.0, 1.0, 0.0),
+                radius: 1.0,
+                mat: Material {
+                    color: Color(255, 0, 0),
+                    reflection: 0.0,
+                },
+            }),
+            Box::new(Sphere{
+                point: V3(2.0, 1.0, 0.0),
+                radius: 1.0,
+                mat: Material {
+                    color: Color(0, 255, 0),
+                    reflection: 0.0,
+                },
+            }),
         ],
         lights: vec![Light{point: V3(0.0, 5.0, 0.0), color: Color(255, 255, 255)}],
         camera: Camera {
             point: V3(0.0, 1.0, -5.0),
             direction: V3(0.0, 0.0, 1.0),
             fov: PI/2.0,
-            resolution: (256, 256),
+            resolution: (1920, 1080),
         },
         background: Color(212, 212, 212),
     };

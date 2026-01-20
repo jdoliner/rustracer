@@ -200,6 +200,20 @@ struct Light {
     color: Color,
 }
 
+impl Light {
+    fn shade(&self, h: &Hit) -> Color {
+        let mut light_vec = self.point - h.1;
+        light_vec.normalize();
+        let intensity = light_vec * h.2;
+        let (cl, cm) = (self.color, h.3.color);
+        Color(
+            ((cl.0 as f64 / 255.0) * (cm.0 as f64 / 255.0) * intensity * 255.0) as u8,
+            ((cl.1 as f64 / 255.0) * (cm.1 as f64 / 255.0) * intensity * 255.0) as u8,
+            ((cl.2 as f64 / 255.0) * (cm.2 as f64 / 255.0) * intensity * 255.0) as u8,
+        )
+    }
+}
+
 struct Camera {
     point: V3,
     direction: V3,
@@ -254,7 +268,7 @@ impl Scene {
         let bg = self.background;
         for (i, h) in hits.iter().enumerate() {
             if let Some(h) = h {
-                let color = h.3.color;
+                let color = self.lights[0].shade(h);
                 write!(image, "{} {} {} ", color.0, color.1, color.2)?;
             } else {
                 write!(image, "{} {} {} ", bg.0, bg.1, bg.2)?;
@@ -287,26 +301,18 @@ fn main() {
                 },
             }),
             Box::new(Sphere{
-                point: V3(-1.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(255, 0, 0),
-                    reflection: 0.0,
-                },
-            }),
-            Box::new(Sphere{
                 point: V3(-2.0, 1.0, 0.0),
                 radius: 1.0,
                 mat: Material {
-                    color: Color(0, 255, 0),
+                    color: Color(255, 0, 0),
                     reflection: 0.0,
                 },
             }),
             Box::new(Sphere{
-                point: V3(1.0, 1.0, 0.0),
+                point: V3(-4.0, 1.0, 0.0),
                 radius: 1.0,
                 mat: Material {
-                    color: Color(255, 0, 0),
+                    color: Color(0, 255, 0),
                     reflection: 0.0,
                 },
             }),
@@ -314,12 +320,20 @@ fn main() {
                 point: V3(2.0, 1.0, 0.0),
                 radius: 1.0,
                 mat: Material {
+                    color: Color(255, 0, 0),
+                    reflection: 0.0,
+                },
+            }),
+            Box::new(Sphere{
+                point: V3(4.0, 1.0, 0.0),
+                radius: 1.0,
+                mat: Material {
                     color: Color(0, 255, 0),
                     reflection: 0.0,
                 },
             }),
         ],
-        lights: vec![Light{point: V3(0.0, 5.0, 0.0), color: Color(255, 255, 255)}],
+        lights: vec![Light{point: V3(0.0, 5.0, -2.5), color: Color(255, 255, 255)}],
         camera: Camera {
             point: V3(0.0, 1.0, -5.0),
             direction: V3(0.0, 0.0, 1.0),

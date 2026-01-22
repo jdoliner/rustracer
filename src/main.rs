@@ -4,6 +4,8 @@ use std::cmp::Ordering::{Less, Equal, Greater};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::io::prelude::*;
+use rayon::prelude::*;
+use indicatif::{ProgressIterator, ParallelProgressIterator, ProgressBar, ProgressStyle};
 
 const EPSILON: f64 = 1e-9;
 #[derive(Debug,Copy,Clone)]
@@ -316,7 +318,7 @@ impl Camera {
 }
 
 struct Scene {
-    solids: Vec<Box<dyn Solid>>,
+    solids: Vec<Box<dyn Solid+Send+Sync>>,
     lights: Vec<Light>,
     camera: Camera,
     background: Color,
@@ -366,22 +368,31 @@ impl Scene {
     }
     fn render(&self, path: &str) -> std::io::Result<()> {
         let rays = self.camera.rays();
-        let mut hits = Vec::<Option<Hit>>::new();
-        for ray in &rays {
-            hits.push(self.intersect(ray));
-        }
+        let bg = self.background;
+        let pb = ProgressBar::new(rays.len() as u64);
+        pb.set_style(ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} ({percent}%) | {msg} | Speed: {per_sec} | ETA: {eta}"
+    )
+            .unwrap()
+            .progress_chars("=> "));
+        let colors: Vec::<Color> = rays.par_iter()
+            .progress_with(pb.clone())
+            .map(|r| {
+                let h = &self.intersect(r);
+                if let Some(h) = h {
+                    self.shade(h, 4)
+                } else {
+                    bg
+                }
+            })
+            .collect();
         let mut image = File::create(path)?;
         write!(image, "P3\n")?;
         write!(image, "{} {}\n", self.camera.resolution.0, self.camera.resolution.1)?;
         write!(image, "255\n")?;
-        let bg = self.background;
-        for (i, h) in hits.iter().enumerate() {
-            if let Some(h) = h {
-                let color = self.shade(h, 8);
-                write!(image, "{} {} {} ", color.0, color.1, color.2)?;
-            } else {
-                write!(image, "{} {} {} ", bg.0, bg.1, bg.2)?;
-            }
+        pb.reset();
+        for (i, c) in colors.iter().progress_with(pb.clone()).enumerate() {
+            write!(image, "{} {} {} ", c.0, c.1, c.2)?;
             if (i as i64 + 1) % self.camera.resolution.0 == 0 {
                 write!(image, "\n")?;
             }
@@ -391,7 +402,7 @@ impl Scene {
 }
 
 fn main() {
-    let scene = Scene {
+    let mut scene = Scene {
         solids: vec![
             Box::new(Plane{
                 point: V3(0.0, 0.0, 0.0),
@@ -401,59 +412,34 @@ fn main() {
                     reflection: 0.4,
                 },
             }),
-            Box::new(Sphere{
-                point: V3(0.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(0, 255, 0),
-                    reflection: 0.1,
-                },
-            }),
-            Box::new(Sphere{
-                point: V3(-2.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(255, 0, 0),
-                    reflection: 0.1,
-                },
-            }),
-            Box::new(Sphere{
-                point: V3(-4.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(0, 255, 0),
-                    reflection: 0.1,
-                },
-            }),
-            Box::new(Sphere{
-                point: V3(2.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(255, 0, 0),
-                    reflection: 0.1,
-                },
-            }),
-            Box::new(Sphere{
-                point: V3(4.0, 1.0, 0.0),
-                radius: 1.0,
-                mat: Material {
-                    color: Color(0, 255, 0),
-                    reflection: 0.1,
-                },
-            }),
         ],
         lights: vec![
-            Light{point: V3(-2.5, 5.0, -2.5), color: Color(80,  0, 80)},
-            Light{point: V3( 2.5, 5.0, -2.5), color: Color( 0, 80, 80)},
+            Light{point: V3(-2.5, 10.0, -2.5), color: Color(80,  0, 80)},
+            Light{point: V3( 2.5, 10.0, -2.5), color: Color( 0, 80, 80)},
         ],
         camera: Camera {
-            point: V3(0.0, 1.0, -5.0),
+            point: V3(0.0, 5.0, -10.0),
             direction: V3(0.0, 0.0, 1.0),
             fov: PI/2.0,
             resolution: (1920, 1080),
         },
         background: Color(212, 212, 212),
     };
+    for i in -3..3 {
+        for j in 1..7 {
+            for k in 0..6{
+                scene.solids.push(
+                    Box::new(Sphere{
+                        point: V3(i as f64, j as f64 - 0.5, k as f64),
+                        radius: 0.5,
+                        mat: Material {
+                            color: Color(255, 255, 255),
+                            reflection: 0.2,
+                        },
+                    }));
+            }
+        }
+    }
     if let Err(e) = scene.render("out.ppm") {
         println!("{e}");
     }

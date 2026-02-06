@@ -1,15 +1,16 @@
-use std::ops::{Add, Sub, Mul};
-use std::vec;
-use std::cmp::Ordering::{Less, Equal, Greater};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
+use rand::Rng;
+use rayon::prelude::*;
+use std::cmp::Ordering::{Equal, Greater, Less};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::io::prelude::*;
-use rayon::prelude::*;
-use indicatif::{ProgressIterator, ParallelProgressIterator, ProgressBar, ProgressStyle};
+use std::ops::{Add, Mul, Sub};
+use std::vec;
 
 const EPSILON: f64 = 1e-9;
-#[derive(Debug,Copy,Clone)]
-struct V3 (f64, f64, f64);
+#[derive(Debug, Copy, Clone)]
+struct V3(f64, f64, f64);
 
 impl Add for V3 {
     type Output = Self;
@@ -35,7 +36,7 @@ impl Mul for V3 {
 
 impl V3 {
     fn magnitude(self) -> f64 {
-        (self*self).sqrt()
+        (self * self).sqrt()
     }
     fn scale(self, s: f64) -> V3 {
         V3(self.0 * s, self.1 * s, self.2 * s)
@@ -44,8 +45,47 @@ impl V3 {
         self = self.scale(self.magnitude());
     }
     fn cross(self, other: V3) -> V3 {
-        V3((self.1*other.2) - (self.2*other.1), (self.0*other.2) - (self.2*other.0), (self.0*other.1) - (self.1*other.0))
+        V3(
+            (self.1 * other.2) - (self.2 * other.1),
+            (self.0 * other.2) - (self.2 * other.0),
+            (self.0 * other.1) - (self.1 * other.0),
+        )
     }
+}
+
+/// Generate a random direction on the hemisphere above a surface with cosine-weighted distribution.
+/// This sampling strategy produces directions with probability proportional to cos(theta),
+/// where theta is the angle between the sampled direction and the normal.
+fn cosine_weighted_hemisphere_sample(normal: V3) -> V3 {
+    let mut rng = rand::thread_rng();
+
+    // Generate two uniform random numbers
+    let r1: f64 = rng.r#gen();
+    let r2: f64 = rng.r#gen();
+
+    // Cosine-weighted sampling in local coordinates
+    // Using the inverse CDF method: cos(theta) = sqrt(r2) gives cosine weighting
+    let phi = 2.0 * PI * r1;
+    let cos_theta = r2.sqrt();
+    let sin_theta = (1.0 - r2).sqrt();
+
+    // Local direction (z-up in local space)
+    let local_dir = V3(phi.cos() * sin_theta, phi.sin() * sin_theta, cos_theta);
+
+    // Build orthonormal basis around normal (normal becomes the local z-axis)
+    let w = normal;
+    // Choose a vector not parallel to w for cross product
+    let a = if w.0.abs() > 0.9 {
+        V3(0.0, 1.0, 0.0)
+    } else {
+        V3(1.0, 0.0, 0.0)
+    };
+    let u = a.cross(w);
+    let u = u.scale(1.0 / u.magnitude());
+    let v = w.cross(u);
+
+    // Transform local direction to world coordinates
+    u.scale(local_dir.0) + v.scale(local_dir.1) + w.scale(local_dir.2)
 }
 
 struct Ray {
@@ -53,8 +93,8 @@ struct Ray {
     direction: V3,
 }
 
-#[derive(Debug,Copy,Clone)]
-struct Color (u8, u8, u8);
+#[derive(Debug, Copy, Clone)]
+struct Color(u8, u8, u8);
 
 impl Add for Color {
     type Output = Self;
@@ -71,7 +111,7 @@ impl Mul for Color {
     type Output = Self;
     fn mul(self, other: Self) -> Self {
         Color(
-            ((self.0 as f64 / 255.0) * (other.0 as f64 / 255.0) * 255.0) as u8, 
+            ((self.0 as f64 / 255.0) * (other.0 as f64 / 255.0) * 255.0) as u8,
             ((self.1 as f64 / 255.0) * (other.1 as f64 / 255.0) * 255.0) as u8,
             ((self.2 as f64 / 255.0) * (other.2 as f64 / 255.0) * 255.0) as u8,
         )
@@ -88,13 +128,13 @@ impl Color {
     }
 }
 
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 struct Material {
     color: Color,
     reflection: f64,
 }
 
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 struct Hit {
     distance: f64,
     direction: V3,
@@ -108,13 +148,16 @@ trait Solid {
 }
 
 fn min_positive(hits: Vec<Option<Hit>>) -> Option<Hit> {
-    let mut sorted = hits.iter().filter(|x| {
-        if let Some(x) = x {
-            x.distance > 0.0
-        } else {
-            false
-        }
-    }).collect::<Vec<&Option<Hit>>>();
+    let mut sorted = hits
+        .iter()
+        .filter(|x| {
+            if let Some(x) = x {
+                x.distance > 0.0
+            } else {
+                false
+            }
+        })
+        .collect::<Vec<&Option<Hit>>>();
     sorted.sort_by(|a, b| {
         if let (Some(a), Some(b)) = (a, b) {
             if a.distance < b.distance {
@@ -128,11 +171,7 @@ fn min_positive(hits: Vec<Option<Hit>>) -> Option<Hit> {
             panic!("unreachable")
         }
     });
-    if sorted.is_empty() {
-        None
-    } else {
-        *sorted[0]
-    }
+    if sorted.is_empty() { None } else { *sorted[0] }
 }
 
 struct Plane {
@@ -145,7 +184,7 @@ impl Solid for Plane {
     fn intersect(&self, r: &Ray) -> Option<Hit> {
         let denom = r.direction * self.normal;
         if denom.abs() < EPSILON {
-            return None
+            return None;
         }
         let t = ((self.point - r.point) * self.normal) / denom;
         if t < 0.0 {
@@ -153,7 +192,7 @@ impl Solid for Plane {
         } else {
             let disp = r.direction.scale(t);
             let hit = r.point + disp;
-            Some(Hit{
+            Some(Hit {
                 distance: disp.magnitude(),
                 direction: r.direction,
                 point: hit,
@@ -178,7 +217,7 @@ impl Solid for Sphere {
         let b = 2.0 * (r.direction * L);
         let c = (L * L) - (self.radius * self.radius);
 
-        let discriminant = (b*b) - (4.0*a*c);
+        let discriminant = (b * b) - (4.0 * a * c);
         if discriminant < 0.0 {
             None
         } else {
@@ -199,8 +238,8 @@ impl Solid for Sphere {
             if let Some(t) = t {
                 let disp = r.direction.scale(t);
                 let hit = r.point + disp;
-                let normal = (hit - self.point).scale(1.0/self.radius);
-                Some(Hit{
+                let normal = (hit - self.point).scale(1.0 / self.radius);
+                Some(Hit {
                     distance: disp.magnitude(),
                     direction: r.direction,
                     point: hit,
@@ -227,55 +266,64 @@ impl Solid for Cube {
         let (y_min, y_max) = (self.point.1 - radius, self.point.1 + radius);
         let (z_min, z_max) = (self.point.2 - radius, self.point.2 + radius);
 
-        let (tx1, tx2) = ((x_min - r.point.0) / r.direction.0, (x_max - r.point.0) / r.direction.0);
-        let (ty1, ty2) = ((y_min - r.point.0) / r.direction.0, (y_max - r.point.0) / r.direction.0);
-        let (tz1, tz2) = ((z_min - r.point.0) / r.direction.0, (z_max - r.point.0) / r.direction.0);
+        let (tx1, tx2) = (
+            (x_min - r.point.0) / r.direction.0,
+            (x_max - r.point.0) / r.direction.0,
+        );
+        let (ty1, ty2) = (
+            (y_min - r.point.0) / r.direction.0,
+            (y_max - r.point.0) / r.direction.0,
+        );
+        let (tz1, tz2) = (
+            (z_min - r.point.0) / r.direction.0,
+            (z_max - r.point.0) / r.direction.0,
+        );
 
         let (dispx1, dispx2) = (r.direction.scale(tx1), r.direction.scale(tx2));
         let (dispy1, dispy2) = (r.direction.scale(ty1), r.direction.scale(ty2));
         let (dispz1, dispz2) = (r.direction.scale(tz1), r.direction.scale(tz2));
 
         let hits = vec![
-            Some(Hit{
+            Some(Hit {
                 distance: dispx1.magnitude(),
                 direction: r.direction,
                 point: r.point + dispx1,
                 normal: V3(-1.0, 0.0, 0.0),
                 mat: self.mat,
             }),
-            Some(Hit{
+            Some(Hit {
                 distance: dispx2.magnitude(),
                 direction: r.direction,
                 point: r.point + dispx2,
-                normal: V3( 1.0, 0.0, 0.0),
+                normal: V3(1.0, 0.0, 0.0),
                 mat: self.mat,
             }),
-            Some(Hit{
+            Some(Hit {
                 distance: dispy1.magnitude(),
                 direction: r.direction,
                 point: r.point + dispy1,
                 normal: V3(0.0, -1.0, 0.0),
                 mat: self.mat,
             }),
-            Some(Hit{
+            Some(Hit {
                 distance: dispy2.magnitude(),
                 direction: r.direction,
                 point: r.point + dispy2,
-                normal: V3(0.0,  1.0, 0.0),
+                normal: V3(0.0, 1.0, 0.0),
                 mat: self.mat,
             }),
-            Some(Hit{
+            Some(Hit {
                 distance: dispz1.magnitude(),
                 direction: r.direction,
                 point: r.point + dispx1,
                 normal: V3(0.0, 0.0, -1.0),
                 mat: self.mat,
             }),
-            Some(Hit{
+            Some(Hit {
                 distance: dispz2.magnitude(),
                 direction: r.direction,
                 point: r.point + dispx2,
-                normal: V3(0.0, 0.0,  1.0),
+                normal: V3(0.0, 0.0, 1.0),
                 mat: self.mat,
             }),
         ];
@@ -306,11 +354,20 @@ impl Camera {
         let V = W.cross(U);
         for j in (0..self.resolution.1).rev() {
             for i in 0..self.resolution.0 {
-                let (u, v) = ((i as f64 + 0.5)/self.resolution.0 as f64, (j as f64 + 0.5)/self.resolution.1 as f64);
-                let (x, y) = (((2.0 * u) - 1.0) * (width / 2.0), (1.0 - (2.0 * v)) * (height / 2.0));
+                let (u, v) = (
+                    (i as f64 + 0.5) / self.resolution.0 as f64,
+                    (j as f64 + 0.5) / self.resolution.1 as f64,
+                );
+                let (x, y) = (
+                    ((2.0 * u) - 1.0) * (width / 2.0),
+                    (1.0 - (2.0 * v)) * (height / 2.0),
+                );
                 let direction = U.scale(x) + V.scale(y) + W;
                 direction.normalize();
-                result.push(Ray {point: self.point, direction});
+                result.push(Ray {
+                    point: self.point,
+                    direction,
+                });
             }
         }
         result
@@ -318,7 +375,7 @@ impl Camera {
 }
 
 struct Scene {
-    solids: Vec<Box<dyn Solid+Send+Sync>>,
+    solids: Vec<Box<dyn Solid + Send + Sync>>,
     lights: Vec<Light>,
     camera: Camera,
     background: Color,
@@ -335,36 +392,86 @@ impl Solid for Scene {
 }
 
 impl Scene {
-    fn shade(&self, h: &Hit, bounces: i64) -> Color {
+    fn shade(&self, h: &Hit, bounces: i64, gi_samples: i32) -> Color {
         let mc = h.mat.color;
         let mut shaded_c = Color(0, 0, 0);
+
+        // Direct lighting
         for l in &self.lights {
             let light_dir = l.point - h.point;
             let light_dist = light_dir.magnitude();
             light_dir.normalize();
-            let sh = &self.intersect(&Ray{
+            let sh = &self.intersect(&Ray {
                 point: h.point + h.normal.scale(0.0001),
                 direction: light_dir,
             });
-            if let Some(sh) = sh && sh.distance < light_dist {
-                continue
+            if let Some(sh) = sh
+                && sh.distance < light_dist
+            {
+                continue;
             }
             let intensity = light_dir * h.normal;
             let lc = l.color;
             let l_shaded_color = (lc * mc).scale(intensity);
             shaded_c = shaded_c + l_shaded_color;
         }
+
+        // Specular reflection
         let r = h.mat.reflection;
         let mut reflection_c = self.background;
         if r > EPSILON && bounces > 0 {
             let r_direction = h.direction - h.normal.scale(2.0 * (h.direction * h.normal));
             let r_point = h.point + h.normal.scale(0.0001);
-            let rh = &self.intersect(&Ray{point: r_point, direction: r_direction});
+            let rh = &self.intersect(&Ray {
+                point: r_point,
+                direction: r_direction,
+            });
             if let Some(rh) = rh {
-                reflection_c = self.shade(rh, bounces - 1);
+                reflection_c = self.shade(rh, bounces - 1, gi_samples / 2);
             }
         }
-        shaded_c.scale(1.0 - r) + reflection_c.scale(r)
+
+        // Global illumination via cosine-weighted hemisphere sampling
+        let mut indirect_c = Color(0, 0, 0);
+        if bounces > 0 && gi_samples > 0 {
+            let mut accumulated = (0.0_f64, 0.0_f64, 0.0_f64);
+
+            for _ in 0..gi_samples {
+                let sample_dir = cosine_weighted_hemisphere_sample(h.normal);
+                let sample_ray = Ray {
+                    point: h.point + h.normal.scale(0.0001),
+                    direction: sample_dir,
+                };
+
+                if let Some(sample_hit) = self.intersect(&sample_ray) {
+                    // Recursive call with fewer bounces and samples
+                    let sample_color = self.shade(&sample_hit, bounces - 1, gi_samples / 4);
+                    // With cosine weighting, the PDF cancels the cos(theta) term
+                    // so we just average the colors
+                    accumulated.0 += sample_color.0 as f64;
+                    accumulated.1 += sample_color.1 as f64;
+                    accumulated.2 += sample_color.2 as f64;
+                } else {
+                    // Hit background/sky - contributes ambient light
+                    accumulated.0 += self.background.0 as f64;
+                    accumulated.1 += self.background.1 as f64;
+                    accumulated.2 += self.background.2 as f64;
+                }
+            }
+
+            indirect_c = Color(
+                (accumulated.0 / gi_samples as f64).clamp(0.0, 255.0) as u8,
+                (accumulated.1 / gi_samples as f64).clamp(0.0, 255.0) as u8,
+                (accumulated.2 / gi_samples as f64).clamp(0.0, 255.0) as u8,
+            );
+        }
+
+        // Combine: direct + reflection + indirect
+        // The diffuse weight is the portion not going to specular reflection
+        let diffuse_weight = 1.0 - r;
+        shaded_c.scale(diffuse_weight)
+            + reflection_c.scale(r)
+            + (indirect_c * mc).scale(diffuse_weight * 0.5)
     }
     fn render(&self, path: &str) -> std::io::Result<()> {
         let rays = self.camera.rays();
@@ -375,12 +482,13 @@ impl Scene {
     )
             .unwrap()
             .progress_chars("=> "));
-        let colors: Vec::<Color> = rays.par_iter()
+        let colors: Vec<Color> = rays
+            .par_iter()
             .progress_with(pb.clone())
             .map(|r| {
                 let h = &self.intersect(r);
                 if let Some(h) = h {
-                    self.shade(h, 4)
+                    self.shade(h, 4, 8) // 4 bounces, 8 GI samples per hit
                 } else {
                     bg
                 }
@@ -388,7 +496,11 @@ impl Scene {
             .collect();
         let mut image = File::create(path)?;
         write!(image, "P3\n")?;
-        write!(image, "{} {}\n", self.camera.resolution.0, self.camera.resolution.1)?;
+        write!(
+            image,
+            "{} {}\n",
+            self.camera.resolution.0, self.camera.resolution.1
+        )?;
         write!(image, "255\n")?;
         pb.reset();
         for (i, c) in colors.iter().progress_with(pb.clone()).enumerate() {
@@ -403,40 +515,43 @@ impl Scene {
 
 fn main() {
     let mut scene = Scene {
-        solids: vec![
-            Box::new(Plane{
-                point: V3(0.0, 0.0, 0.0),
-                normal: V3(0.0, 1.0, 0.0),
-                mat: Material {
-                    color: Color(0, 0, 255),
-                    reflection: 0.4,
-                },
-            }),
-        ],
+        solids: vec![Box::new(Plane {
+            point: V3(0.0, 0.0, 0.0),
+            normal: V3(0.0, 1.0, 0.0),
+            mat: Material {
+                color: Color(0, 0, 255),
+                reflection: 0.4,
+            },
+        })],
         lights: vec![
-            Light{point: V3(-2.5, 10.0, -2.5), color: Color(80,  0, 80)},
-            Light{point: V3( 2.5, 10.0, -2.5), color: Color( 0, 80, 80)},
+            Light {
+                point: V3(-2.5, 10.0, -2.5),
+                color: Color(80, 0, 80),
+            },
+            Light {
+                point: V3(2.5, 10.0, -2.5),
+                color: Color(0, 80, 80),
+            },
         ],
         camera: Camera {
             point: V3(0.0, 5.0, -10.0),
             direction: V3(0.0, 0.0, 1.0),
-            fov: PI/2.0,
+            fov: PI / 2.0,
             resolution: (1920, 1080),
         },
         background: Color(212, 212, 212),
     };
     for i in -3..3 {
         for j in 1..7 {
-            for k in 0..6{
-                scene.solids.push(
-                    Box::new(Sphere{
-                        point: V3(i as f64, j as f64 - 0.5, k as f64),
-                        radius: 0.5,
-                        mat: Material {
-                            color: Color(255, 255, 255),
-                            reflection: 0.2,
-                        },
-                    }));
+            for k in 0..6 {
+                scene.solids.push(Box::new(Sphere {
+                    point: V3(i as f64, j as f64 - 0.5, k as f64),
+                    radius: 0.5,
+                    mat: Material {
+                        color: Color(255, 255, 255),
+                        reflection: 0.2,
+                    },
+                }));
             }
         }
     }
@@ -444,4 +559,3 @@ fn main() {
         println!("{e}");
     }
 }
-
